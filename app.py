@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import random
 from datetime import datetime
 import utils
@@ -17,17 +16,9 @@ if not csv_files:
     st.error("Kansiosta ei löytynyt yhtään CSV-tiedostoa.")
     st.stop()
 
-# Muista aiempi valinta sessionissa
-prev_sel = st.session_state.get("selected_csv")
-default_index = csv_files.index(prev_sel) if prev_sel in csv_files else 0
-selected_csv = st.selectbox("Valitse sanalista", csv_files, index=default_index, key="selected_csv")
+selected_csv = st.selectbox("Valitse sanalista", csv_files, index=0)
 
-# Nollaa käynnissä oleva visa, jos lista vaihtui
-if st.session_state.get("selected_csv_prev") != selected_csv:
-    st.session_state.quiz_state = None
-    st.session_state.selected_csv_prev = selected_csv
-
-# Päivitä utilsin polut valinnan mukaan
+# päivitä utilsin tiedostopolut
 utils.CSV_FILE = selected_csv
 base = os.path.splitext(selected_csv)[0]
 utils.PACKAGES_FILE = f"{base}_packages.json"
@@ -58,11 +49,12 @@ else:
 # --------------------
 # Välilehdet ja tila
 # --------------------
-TAB_LABELS = ["📂 Pakettilista", "🎮 Visa", "📊 Tulos", "🏆 Ennätykset"]
+scores = utils.load_highscores()
+TAB_LABELS = ["📂 Pakettilista", "🎮 Visa", "🏆 Ennätykset"]
 if "quiz_state" not in st.session_state:
     st.session_state.quiz_state = None
 
-tab1, tab2, tab3, tab4 = st.tabs(TAB_LABELS)
+tab1, tab2, tab3 = st.tabs(TAB_LABELS)
 
 # --------------------
 # TAB 1: Pakettilista
@@ -72,7 +64,9 @@ with tab1:
     if packages:
         total_words = len(words)
         num_packages = len(packages)
-        st.caption(f"📦 {total_words} sanaa, {num_packages} pakettia (paketin koko {utils.PACKAGE_SIZE})")
+        st.caption(
+            f"📦 {total_words} sanaa, {num_packages} pakettia (paketin koko {utils.PACKAGE_SIZE})"
+        )
         for p_id, idxs in packages.items():
             st.subheader(f"{p_id} — {len(idxs)} sanaa")
             st.table(words.iloc[idxs][["suomi", "italia", "epäsäännöllinen"]])
@@ -92,10 +86,10 @@ with tab2:
         mode = st.radio("Tila", ["Eka kierros", "Kunnes kaikki oikein"], horizontal=True)
         package_choice = st.selectbox("Paketti", ["kaikki"] + list(packages.keys()))
 
-        colA, colB = st.columns([1,1])
-        with colA:
+        start_col1, start_col2 = st.columns([1, 1])
+        with start_col1:
             start = st.button("Aloita visa", type="primary")
-        with colB:
+        with start_col2:
             if st.button("Nollaa käynnissä oleva visa"):
                 st.session_state.quiz_state = None
                 st.rerun()
@@ -106,6 +100,7 @@ with tab2:
             else:
                 indices = list(packages[package_choice])
 
+            # Suodata sanajoukko
             if wordset == "epäsäännölliset":
                 indices = [i for i in indices if str(words.iloc[i]["epäsäännöllinen"]).lower() == "x"]
             elif wordset == "säännölliset":
@@ -142,16 +137,24 @@ with tab2:
                 total_qs = len(state["indices"])
                 st.progress(progress / total_qs, text=f"Kysymys {progress}/{total_qs}")
 
-                # --- Juokseva eka kierros oikein -laskuri ---
+                # --- Juokseva "Oikein tähän mennessä" -laskuri ---
+                answered_so_far = min(state["ptr"], state["first_total"])
+                if state.get("await_next", False):
+                    answered_so_far = min(answered_so_far + 1, state["first_total"])
+
                 first_correct_preview = state["first_correct"]
-                if state.get("await_next") and state.get("last_feedback", {}).get("is_correct") and state["ptr"] < state["first_total"]:
-                    first_correct_preview += 1
-                pct_preview = round(100 * first_correct_preview / max(1, state["first_total"]), 1)
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    st.metric("Eka kierros oikein", f"{first_correct_preview}/{state['first_total']}", f"{pct_preview}%")
-                with c2:
-                    st.caption("Ensimmäisen kierroksen tulos päivittyy reaaliajassa.")
+                if state.get("await_next", False):
+                    fb = state.get("last_feedback")
+                    if fb and fb.get("is_correct"):
+                        first_correct_preview += 1
+
+                pct_preview = round(100 * first_correct_preview / max(1, answered_so_far), 1)
+
+                st.metric(
+                    "Oikein tähän mennessä",
+                    f"{first_correct_preview}/{answered_so_far}",
+                    f"{pct_preview}%"
+                )
 
                 # Kysymys
                 if state["direction"] == "it → fi":
@@ -161,39 +164,35 @@ with tab2:
 
                 st.subheader(f"Sana: **{question}**")
 
-                # --- Palautenäkymä ---
-                if state.get("await_next"):
-                    fb = state.get("last_feedback", {})
-                    if fb.get("is_correct"):
+                if not state.get("await_next", False):
+                    with st.form(key=f"form_{state['qkey']}"):
+                        user_answer = st.text_input("Vastauksesi:", key=f"answer_{state['qkey']}", autofocus=True)
+                        submitted = st.form_submit_button("Tarkista")
+
+                    if submitted:
+                        correct_set = [a.strip().lower() for a in str(answer).split(";")]
+                        is_correct = user_answer.strip().lower() in correct_set
+
+                        state["last_feedback"] = {"is_correct": is_correct, "answer": answer}
+                        state["await_next"] = True
+                        st.rerun()
+                else:
+                    fb = state["last_feedback"]
+                    if fb["is_correct"]:
                         st.success("✓ Oikein!")
-                    else:
-                        st.error(f"✗ Väärin. Oikea vastaus: {fb.get('answer')}")
-
-                    with st.form(key=f"nextform_{state['qkey']}"):
-                        st.text_input("Paina Enter jatkaaksesi", value="", key=f"continue_{state['qkey']}")
-                        go_next = st.form_submit_button("Seuraava")
-
-                    components.html(
-                        """
-                        <script>
-                        const t = setInterval(() => {
-                          const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-                          if (inputs.length) {
-                            inputs[inputs.length - 1].focus();
-                            clearInterval(t);
-                          }
-                        }, 50);
-                        </script>
-                        """,
-                        height=0,
-                    )
-
-                    if go_next:
-                        if fb.get("is_correct") and state["ptr"] < state["first_total"]:
+                        if state["ptr"] < state["first_total"]:
                             state["first_correct"] += 1
-                        if (not fb.get("is_correct")) and state["mode"] == "Kunnes kaikki oikein":
-                            state["indices"].append(fb.get("current_index"))
+                    else:
+                        st.error(f"✗ Väärin. Oikea vastaus: {fb['answer']}")
+                        if state["mode"] == "Kunnes kaikki oikein":
+                            state["indices"].append(current_index)
 
+                    with st.form(key=f"next_{state['qkey']}"):
+                        st.write("Paina Enter jatkaaksesi")
+                        _ = st.text_input("(Enter = Seuraava)", key=f"dummy_{state['qkey']}", label_visibility="collapsed")
+                        next_pressed = st.form_submit_button("Seuraava")
+
+                    if next_pressed:
                         state["ptr"] += 1
                         state["qkey"] += 1
                         state["await_next"] = False
@@ -202,62 +201,27 @@ with tab2:
                             state["done"] = True
                         st.rerun()
 
-                # --- Vastauslomake ---
-                else:
-                    with st.form(key=f"form_{state['qkey']}"):
-                        user_answer = st.text_input("Vastauksesi:")
-                        submitted = st.form_submit_button("Tarkista")
+        # --- Visa valmis → näytetään lopputulos ---
+        if state and state["done"]:
+            first_total = max(1, state["first_total"])
+            first_correct = state["first_correct"]
+            pct = round(100 * first_correct / first_total, 1)
 
-                    components.html(
-                        """
-                        <script>
-                        const t = setInterval(() => {
-                          const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-                          if (inputs.length) {
-                            inputs[inputs.length - 1].focus();
-                            clearInterval(t);
-                          }
-                        }, 50);
-                        </script>
-                        """,
-                        height=0,
-                    )
+            # kesto ja keskimääräinen vastausaika
+            from datetime import datetime as _dt
+            start = _dt.fromisoformat(state.get("start_time")) if state.get("start_time") else None
+            end = _dt.now()
+            duration = (end - start).seconds if start else None
+            avg_time = round(duration / first_total, 1) if duration else None
 
-                    if submitted:
-                        correct_set = [a.strip().lower() for a in str(answer).split(";")]
-                        is_correct = user_answer.strip().lower() in correct_set
-                        state["last_feedback"] = {
-                            "is_correct": is_correct,
-                            "answer": answer,
-                            "user": user_answer,
-                            "current_index": current_index,
-                        }
-                        state["await_next"] = True
-                        st.rerun()
+            msg = f"Visa päättyi! Eka kierros oikein: {first_correct}/{first_total} ({pct}%)"
+            if duration:
+                msg += f" — kesto {duration} s"
+            if avg_time:
+                msg += f" — keskimäärin {avg_time} s/sana"
+            st.success(msg)
 
-# --------------------
-# TAB 3: Tulos
-# --------------------
-with tab3:
-    st.header("Tulokset")
-    state = st.session_state.get("quiz_state")
-    if state and state["done"]:
-        from datetime import datetime as _dt
-        start = _dt.fromisoformat(state.get("start_time")) if state.get("start_time") else None
-        end = _dt.now()
-        duration = (end - start).seconds if start else None
-        avg_time = round(duration / state["first_total"], 1) if duration and state["first_total"] else None
-
-        first_total = max(1, state["first_total"])
-        first_correct = state["first_correct"]
-        pct = round(100 * first_correct / first_total, 1)
-
-        if state["package"] == "kaikki":
-            st.info(f"Eka kierros yhteensä: **{first_correct}/{first_total} ({pct}%)**")
-            st.caption("Koonti ei tallennu ennätyksiin.")
-        else:
-            st.success(f"Eka kierros oikein: **{first_correct}/{first_total} ({pct}%)**")
-            if not state.get("saved", False):
+            if state["package"] != "kaikki" and not state.get("saved", False):
                 key = f"{state['direction']} | {state['package']} | {state['wordset']}"
                 scores = utils.load_highscores()
                 prev = scores.get(key)
@@ -275,32 +239,23 @@ with tab3:
                 else:
                     st.caption("Ei ylittänyt aiempaa ennätystä → ei tallennettu.")
                 state["saved"] = True
-    else:
-        st.info("Pelaa visa ja palaa tähän nähdäksesi tuloksen.")
+
+            # Uusi peli -nappi
+            if st.button("🔄 Uusi peli", type="primary"):
+                st.session_state.quiz_state = None
+                st.rerun()
 
 # --------------------
-# TAB 4: Ennätykset
+# TAB 3: Ennätykset
 # --------------------
-with tab4:
+with tab3:
     st.header("Ennätykset")
-    st.caption(f"📄 Tämä näkymä käyttää tiedostoa: **{utils.HIGHSCORES_FILE}** (lista: **{selected_csv}**)")
-
     scores = utils.load_highscores()
-    valid_keys = set(packages.keys()) if packages else set()
-    filtered_scores = {}
-    for k, v in scores.items():
-        try:
-            _, pkg_name, _ = [s.strip() for s in k.split("|", maxsplit=2)]
-        except Exception:
-            pkg_name = None
-        if (not valid_keys) or (pkg_name in valid_keys):
-            filtered_scores[k] = v
-
-    if not filtered_scores:
-        st.info("Ei ennätyksiä tälle sanalistalle vielä.")
+    if not scores:
+        st.info("Ei ennätyksiä vielä.")
     else:
         rows = []
-        for k, v in sorted(filtered_scores.items(), key=lambda x: x[0]):
+        for k, v in sorted(scores.items(), key=lambda x: x[0]):
             rows.append({
                 "Avain": k,
                 "Oikein": v.get("oikein"),
@@ -311,15 +266,17 @@ with tab4:
             })
         st.dataframe(rows, use_container_width=True)
 
-        col1, col2, col3 = st.columns([2, 1, 1])
+        col1, col2 = st.columns([2, 1])
         with col1:
-            reset_target = st.selectbox("Valitse nollattava avain (tai Tyhjennä kaikki)",
-                                        ["—"] + sorted(filtered_scores.keys()) + ["Tyhjennä kaikki"])
+            reset_target = st.selectbox(
+                "Valitse nollattava avain (tai Tyhjennä kaikki)",
+                ["—"] + list(scores.keys()) + ["Tyhjennä kaikki"],
+            )
         with col2:
             if st.button("Nollaa"):
-                if "Tyhjennä kaikki" in reset_target:
+                if reset_target == "Tyhjennä kaikki":
                     utils.reset_highscore()
-                    st.success("Kaikki ennätykset tälle sanalistalle nollattu.")
+                    st.success("Kaikki ennätykset nollattu.")
                     st.session_state.quiz_state = None
                     st.rerun()
                 elif reset_target != "—":
@@ -327,12 +284,3 @@ with tab4:
                     st.success("Valittu ennätys nollattu.")
                     st.session_state.quiz_state = None
                     st.rerun()
-        with col3:
-            if st.button("Poista highscores-tiedosto"):
-                try:
-                    os.remove(utils.HIGHSCORES_FILE)
-                    st.success(f"Poistettu: {utils.HIGHSCORES_FILE}")
-                except FileNotFoundError:
-                    st.info("Tiedostoa ei ollut valmiiksi.")
-                st.session_state.quiz_state = None
-                st.rerun()
