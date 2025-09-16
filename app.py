@@ -73,10 +73,11 @@ with tab1:
         st.info("Paina \"Jaa paketit uudelleen\" luodaksesi paketit.")
 
 # --------------------
-# TAB 2: Visa (sis. Kunnes kaikki oikein + tulos lopussa)
+# TAB 2: Visa
 # --------------------
 with tab2:
     st.header("Visa")
+
     if not packages:
         st.info("Luo paketit ensin.")
     else:
@@ -117,6 +118,8 @@ with tab2:
                 "done": False,
                 "qkey": 0,
                 "start_time": datetime.now().isoformat(),
+                "awaiting_next": False,
+                "last_feedback": None,
             }
 
         state = st.session_state.quiz_state
@@ -141,42 +144,62 @@ with tab2:
 
                 st.subheader(f"Sana: **{question}**")
 
-                # Vastauskenttä (ilman Streamlit autofocus, JS hoitaa)
-                user_answer = st.text_input("Vastauksesi:", key=f"answer_{state['qkey']}")
+                if not state["awaiting_next"]:
+                    # vaihe 1: odotetaan vastausta
+                    user_answer = st.text_input("Vastauksesi:", key=f"answer_{state['qkey']}")
+                    st.markdown(
+                        """
+                        <script>
+                        var input = window.parent.document.querySelector('input[data-testid="stTextInput"]');
+                        if (input) { input.focus(); }
+                        </script>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    if user_answer and st.session_state.get(f"enter_pressed_{state['qkey']}", False) is False:
+                        # Enter painettu → tarkistus
+                        correct_set = [a.strip().lower() for a in str(answer).split(";")]
+                        is_correct = user_answer.strip().lower() in correct_set
 
-                # JS autofocus
-                st.markdown(
-                    """
-                    <script>
-                    var input = window.parent.document.querySelector('input[data-testid="stTextInput"]');
-                    if (input) { input.focus(); }
-                    </script>
-                    """,
-                    unsafe_allow_html=True
-                )
+                        if is_correct:
+                            state["last_feedback"] = "✓ Oikein!"
+                            if state["ptr"] < state["first_total"]:
+                                state["first_correct"] += 1
+                        else:
+                            state["last_feedback"] = f"✗ Väärin. Oikea vastaus: {answer}"
+                            if state["mode"] == "Kunnes kaikki oikein":
+                                state["indices"].append(current_index)
 
-                col_a, col_b = st.columns([1,3])
-                with col_a:
-                    submitted = st.button("Tarkista", type="primary")
+                        state["awaiting_next"] = True
+                        st.session_state[f"enter_pressed_{state['qkey']}"] = True
+                        st.rerun()
+                else:
+                    # vaihe 2: palaute näkyy, odotetaan Enter seuraavaan
+                    if state["last_feedback"]:
+                        if state["last_feedback"].startswith("✓"):
+                            st.success(state["last_feedback"])
+                        else:
+                            st.error(state["last_feedback"])
 
-                if submitted and user_answer is not None:
-                    correct_set = [a.strip().lower() for a in str(answer).split(";")]
-                    is_correct = user_answer.strip().lower() in correct_set
-
-                    if is_correct:
-                        st.success("✓ Oikein!")
-                        if state["ptr"] < state["first_total"]:
-                            state["first_correct"] += 1
-                    else:
-                        st.error(f"✗ Väärin. Oikea vastaus: {answer}")
-                        if state["mode"] == "Kunnes kaikki oikein":
-                            state["indices"].append(current_index)
-
-                    state["ptr"] += 1
-                    state["qkey"] += 1
-                    if state["ptr"] >= len(state["indices"]):
-                        state["done"] = True
-                    st.rerun()
+                    dummy = st.text_input("Paina Enter jatkaaksesi", key=f"next_{state['qkey']}")
+                    st.markdown(
+                        """
+                        <script>
+                        var input = window.parent.document.querySelector('input[data-testid="stTextInput"]');
+                        if (input) { input.focus(); }
+                        </script>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    if dummy and st.session_state.get(f"next_pressed_{state['qkey']}", False) is False:
+                        state["ptr"] += 1
+                        state["qkey"] += 1
+                        state["awaiting_next"] = False
+                        state["last_feedback"] = None
+                        st.session_state[f"next_pressed_{state['qkey']-1}"] = True
+                        if state["ptr"] >= len(state["indices"]):
+                            state["done"] = True
+                        st.rerun()
 
         if state and state["done"]:
             first_total = max(1, state["first_total"])
@@ -184,7 +207,6 @@ with tab2:
             pct = round(100 * first_correct / first_total, 1)
             st.success(f"✅ Eka kierros oikein: {first_correct}/{first_total} ({pct}%)")
 
-            # tallennetaan ennätys jos yksittäinen paketti
             if state["package"] != "kaikki":
                 key = f"{state['direction']} | {state['package']} | {state['wordset']}"
                 scores = utils.load_highscores()
