@@ -5,8 +5,8 @@ import utils
 import glob
 import os
 
-st.set_page_config(page_title="Italian–Suomi sanavisa", layout="wide")
-st.title("📖 Italian–Suomi sanavisa")
+st.set_page_config(page_title="Italian–Suomi verbivisa", layout="wide")
+st.title("📖 Italian–Suomi verbivisa")
 
 # --------------------
 # Valitse sanalista
@@ -47,7 +47,7 @@ else:
         st.success("Uusi pakettijako luotu.")
 
 # --------------------
-# Välilehdet ja tila
+# Välilehdet
 # --------------------
 scores = utils.load_highscores()
 TAB_LABELS = ["📂 Pakettilista", "🎮 Visa", "🏆 Ennätykset"]
@@ -61,6 +61,13 @@ tab1, tab2, tab3 = st.tabs(TAB_LABELS)
 # --------------------
 with tab1:
     st.header("Pakettien sisältö")
+    st.markdown("""
+    ### ℹ️ Ohje
+    - Valitse yläreunasta sanalista (CSV).
+    - Jos paketteja ei ole tai rivimäärä on muuttunut, paina **Jaa paketit uudelleen**.
+    - Sanat jaetaan pysyvästi 20 sanan paketteihin.
+    - Voit selata paketteja täältä ja siirtyä sitten *Visa*-välilehdelle harjoittelemaan.
+    """)
     if packages:
         total_words = len(words)
         num_packages = len(packages)
@@ -73,10 +80,20 @@ with tab1:
         st.info("Paina \"Jaa paketit uudelleen\" luodaksesi paketit.")
 
 # --------------------
-# TAB 2: Visa (sis. Kunnes kaikki oikein)
+# TAB 2: Visa
 # --------------------
 with tab2:
     st.header("Visa")
+    st.markdown("""
+    ### ℹ️ Ohje
+    - Valitse suunta (it→fi tai fi→it), sanajoukko ja tila.
+    - Valitse haluamasi paketti tai kaikki paketit.
+    - Paina **Aloita visa** aloittaaksesi.
+    - Vastaa kirjoittamalla käännös ja paina Enter.
+    - Tilassa *Kunnes kaikki oikein* väärin menneet sanat palaavat jonoon.
+    - Ensimmäisen kierroksen tulos näkyy koko ajan ruudulla.
+    """)
+
     if not packages:
         st.info("Luo paketit ensin.")
     else:
@@ -127,31 +144,31 @@ with tab2:
             else:
                 current_index = state["indices"][state["ptr"]]
                 row = words.iloc[current_index]
+
                 # Edistymispalkki
                 progress = state["ptr"] + 1
                 total_qs = len(state["indices"])
                 st.progress(progress / total_qs, text=f"Kysymys {progress}/{total_qs}")
 
-                # Reaaliaikainen laskuri
+                # Ensimmäisen kierroksen tulos reaaliajassa
+                pct = round(100 * state["first_correct"] / max(1, state["first_total"]), 1)
                 st.metric(
-                    "Eka kierros oikein",
-                    f"{state['first_correct']}/{state['first_total']}",
-                    f"{round(100*state['first_correct']/max(1,state['ptr']+1),1)}%"
+                    label="Eka kierros oikein",
+                    value=f"{state['first_correct']}/{state['first_total']}",
+                    delta=f"{pct}%",
+                    delta_color="normal"
                 )
+                st.caption("Ensimmäisen kierroksen tulos päivittyy reaaliajassa.")
 
                 if state["direction"] == "it → fi":
                     question, answer = row["italia"], row["suomi"]
                 else:
                     question, answer = row["suomi"], row["italia"]
 
-                st.subheader(f"Sana: **{question}**")
+                st.subheader(f"Sana: {question}")
 
                 with st.form(key=f"form_{state['qkey']}"):
-                    user_answer = st.text_input(
-                        "Vastauksesi:",
-                        key=f"answer_{int(state.get('qkey', 0))}",
-                        autofocus=True
-                    )
+                    user_answer = st.text_input("Vastauksesi:", autofocus=True)
                     submitted = st.form_submit_button("Tarkista")
 
                 if submitted:
@@ -173,10 +190,44 @@ with tab2:
                         state["done"] = True
                     st.rerun()
 
+        # Näytä lopputulos heti Visa-välilehdellä
         if state and state["done"]:
+            from datetime import datetime as _dt
+            start = _dt.fromisoformat(state.get("start_time")) if state.get("start_time") else None
+            end = _dt.now()
+            duration = (end - start).seconds if start else None
+
             first_total = max(1, state["first_total"])
-            pct = round(100 * state["first_correct"] / first_total, 1)
-            st.success(f"✅ Eka kierros oikein: {state['first_correct']}/{first_total} ({pct}%)")
+            first_correct = state["first_correct"]
+            pct = round(100 * first_correct / first_total, 1)
+
+            if state["package"] == "kaikki":
+                st.info(f"Eka kierros yhteensä: **{first_correct}/{first_total} ({pct}%)**")
+                st.caption("Koonti ei tallennu ennätyksiin.")
+            else:
+                st.success(f"Eka kierros oikein: **{first_correct}/{first_total} ({pct}%)**" +
+                           (f" — aika {duration} s" if duration else ""))
+
+                key = f"{state['direction']} | {state['package']} | {state['wordset']}"
+                scores = utils.load_highscores()
+                prev = scores.get(key)
+                now = {
+                    "oikein": first_correct,
+                    "yhteensä": first_total,
+                    "prosentti": pct,
+                    "aikaleima": datetime.now().isoformat(timespec="seconds"),
+                    "kesto_s": duration if duration else None,
+                }
+                if (not prev) or (first_correct > prev.get("oikein", -1)):
+                    scores[key] = now
+                    utils.save_highscores(scores)
+                    st.write("Ennätys tallennettu.")
+                else:
+                    st.caption("Ei ylittänyt aiempaa ennätystä → ei tallennettu.")
+
+            if st.button("🔄 Uusi peli"):
+                st.session_state.quiz_state = None
+                st.rerun()
 
 # --------------------
 # TAB 3: Ennätykset
