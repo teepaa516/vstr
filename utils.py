@@ -4,22 +4,15 @@ import os
 import random
 from typing import Dict, List
 
-# Nämä asetetaan app.py:ssä sen mukaan, mikä CSV on valittu
+CSV_FILE = "verbit.csv"
 PACKAGES_FILE = "packages.json"
 HIGHSCORES_FILE = "highscores.json"
-CSV_FILE = "verbit.csv"
 PACKAGE_SIZE = 20
 
 # --------------------
 # Sanat
 # --------------------
-def load_words(csv_file: str | None = None) -> pd.DataFrame:
-    """Lataa sanat CSV:stä ja varmistaa sarakkeet.
-    Jos csv_file on None, käytetään utils.CSV_FILE -globaalimuuttujaa.
-    """
-    if csv_file is None:
-        csv_file = CSV_FILE
-
+def load_words(csv_file: str = CSV_FILE) -> pd.DataFrame:
     df = pd.read_csv(csv_file)
     expected = {"suomi", "italia", "epäsäännöllinen"}
     missing = expected - set(df.columns)
@@ -29,12 +22,10 @@ def load_words(csv_file: str | None = None) -> pd.DataFrame:
         df[col] = df[col].astype(str).fillna("").str.strip()
     return df
 
-
 # --------------------
 # Paketinhallinta
 # --------------------
 def load_packages(words: pd.DataFrame, package_size: int = PACKAGE_SIZE):
-    """Lataa olemassa olevat paketit, tarkistaa pituuden"""
     if os.path.exists(PACKAGES_FILE):
         with open(PACKAGES_FILE, "r", encoding="utf-8") as f:
             packages = json.load(f)
@@ -42,13 +33,13 @@ def load_packages(words: pd.DataFrame, package_size: int = PACKAGE_SIZE):
         return packages if total == len(words) else None
     return None
 
+
 def save_packages(packages: Dict[str, List[int]]):
-    """Tallenna pakettijako tiedostoon"""
     with open(PACKAGES_FILE, "w", encoding="utf-8") as f:
         json.dump(packages, f, ensure_ascii=False, indent=2)
 
+
 def create_packages(words: pd.DataFrame, package_size: int = PACKAGE_SIZE):
-    """Luo uusi pakettijako satunnaisesti"""
     indices = list(range(len(words)))
     random.shuffle(indices)
     packages = {}
@@ -61,24 +52,35 @@ def create_packages(words: pd.DataFrame, package_size: int = PACKAGE_SIZE):
 # --------------------
 # Ennätysten hallinta
 # --------------------
-def load_highscores():
-    """Lataa ennätykset JSON:ista"""
+def _load_all_highscores():
+    """Lataa kaikki ennätykset kaikille listoille."""
     if os.path.exists(HIGHSCORES_FILE):
         with open(HIGHSCORES_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def save_highscores(scores):
-    """Tallenna ennätykset JSON:iin"""
+def _save_all_highscores(all_scores):
     with open(HIGHSCORES_FILE, "w", encoding="utf-8") as f:
-        json.dump(scores, f, ensure_ascii=False, indent=2)
+        json.dump(all_scores, f, ensure_ascii=False, indent=2)
+
+def load_highscores():
+    """Palauta vain nykyisen listan ennätykset."""
+    all_scores = _load_all_highscores()
+    return all_scores.get(CSV_FILE, {})
+
+def save_highscores(scores):
+    """Tallenna vain nykyisen listan ennätykset."""
+    all_scores = _load_all_highscores()
+    all_scores[CSV_FILE] = scores
+    _save_all_highscores(all_scores)
 
 def reset_highscore(package_key: str | None = None):
-    """Nollaa kaikki ennätykset tai tietyn paketin ennätyksen"""
-    scores = load_highscores()
+    all_scores = _load_all_highscores()
+    scores = all_scores.get(CSV_FILE, {})
     if package_key:
         scores.pop(package_key, None)
     else:
         scores = {}
-    save_highscores(scores)
+    all_scores[CSV_FILE] = scores
+    _save_all_highscores(all_scores)
     return scores
