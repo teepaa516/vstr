@@ -49,7 +49,6 @@ else:
 # --------------------
 # Välilehdet
 # --------------------
-scores = utils.load_highscores()
 TAB_LABELS = ["📂 Pakettilista", "🎮 Visa", "🏆 Ennätykset"]
 if "quiz_state" not in st.session_state:
     st.session_state.quiz_state = None
@@ -146,11 +145,7 @@ with tab2:
                 st.subheader(f"Sana: **{question}**")
 
                 with st.form(key=f"form_{state['qkey']}"):
-                    user_answer = st.text_input(
-                        "Vastauksesi:",
-                        key=f"answer_{str(state.get('qkey', 0))}",
-                        autofocus=True
-                    )
+                    user_answer = st.text_input("Vastauksesi:", autofocus=True)
                     submitted = st.form_submit_button("Tarkista")
 
                 if submitted:
